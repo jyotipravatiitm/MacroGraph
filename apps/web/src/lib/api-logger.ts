@@ -201,41 +201,54 @@ export function getLogFilePath(date: Date): string {
 
 /**
  * Log API call to markdown file
+ * Note: In serverless environments (Vercel), files are written to /tmp and are ephemeral.
+ * For production, rely on database logs instead.
  */
 export async function logToMarkdown(entry: LogEntry): Promise<string> {
 	const logDir = getLogDirectory();
 	const logFile = getLogFilePath(entry.timestamp);
 
-	// Ensure log directory exists
 	try {
+		// Ensure log directory exists
 		await mkdir(logDir, { recursive: true });
+
+		const markdown = formatAsMarkdown(entry);
+
+		// Append to daily log file
+		try {
+			await appendFile(logFile, markdown, "utf-8");
+		} catch (error) {
+			// If file doesn't exist, create it
+			await writeFile(logFile, markdown, "utf-8");
+		}
+
+		return logFile;
 	} catch (error) {
-		// Directory might already exist, ignore error
+		// In serverless environments, filesystem access might fail
+		// This is expected and not critical since we have database logs
+		console.warn("Failed to write markdown log (expected in serverless):", error);
+		return logFile; // Return path even if write failed
 	}
-
-	const markdown = formatAsMarkdown(entry);
-
-	// Append to daily log file
-	try {
-		await appendFile(logFile, markdown, "utf-8");
-	} catch (error) {
-		// If file doesn't exist, create it
-		await writeFile(logFile, markdown, "utf-8");
-	}
-
-	return logFile;
 }
 
 /**
  * Log API call to both database and markdown
+ * Database logging is critical, markdown is best-effort
  */
 export async function logApiCall(
 	entry: LogEntry,
 ): Promise<{ dbId: number; mdFile: string }> {
-	const [dbId, mdFile] = await Promise.all([
-		logToDatabase(entry),
-		logToMarkdown(entry),
-	]);
+	// Always log to database (critical)
+	const dbId = await logToDatabase(entry);
+
+	// Try to log to markdown (best-effort, may fail in serverless)
+	let mdFile = "";
+	try {
+		mdFile = await logToMarkdown(entry);
+	} catch (error) {
+		console.warn("Markdown logging failed (expected in serverless):", error);
+		mdFile = "N/A (database only)";
+	}
 
 	return { dbId, mdFile };
 }
